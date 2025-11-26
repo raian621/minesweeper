@@ -99,7 +99,7 @@ impl Board {
     // well. This operation is recursive.
     pub fn reveal_cell(&mut self, pos: &Position) -> CellState {
         let surrounding = pos.surrounding(self);
-        if self.bomb_positions.contains(&pos) {
+        if self.bomb_positions.contains(pos) {
             self.states[pos.row][pos.col] = CellState::Bomb;
             return CellState::Bomb;
         }
