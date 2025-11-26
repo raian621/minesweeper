@@ -1,6 +1,20 @@
-use std::fmt::{Display, Formatter};
+use std::{
+    collections::HashSet,
+    fmt::{Display, Formatter},
+};
 
-#[derive(Clone, Copy)]
+const DIRECTIONS: [(isize, isize); 8] = [
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+    (1, 0),
+    (1, -1),
+    (0, -1),
+];
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CellState {
     Empty,
     Unknown,
@@ -8,6 +22,7 @@ pub enum CellState {
     Danger(u8),
 }
 
+#[derive(PartialEq, Eq, Hash)]
 pub struct Position {
     pub col: usize,
     pub row: usize,
@@ -15,7 +30,7 @@ pub struct Position {
 
 pub struct Board {
     pub states: Vec<Vec<CellState>>,
-    pub bomb_positions: Vec<Position>,
+    pub bomb_positions: HashSet<Position>,
 }
 
 pub struct BoardOptions {
@@ -28,6 +43,25 @@ impl Position {
     pub fn new(row: usize, col: usize) -> Self {
         Self { row, col }
     }
+
+    pub fn surrounding(&self, board: &Board) -> Vec<Self> {
+        DIRECTIONS
+            .iter()
+            .filter_map(|(d_row, d_col)| {
+                let new_row = d_row + self.row as isize;
+                let new_col = d_col + self.col as isize;
+                if new_row < 0 && new_col < 0 {
+                    return None;
+                }
+                let new_pos = Position::new(new_row as usize, new_col as usize);
+                if board.position_on_board(&new_pos) {
+                    Some(new_pos)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<Self>>()
+    }
 }
 
 impl Board {
@@ -35,14 +69,14 @@ impl Board {
         Self {
             states: vec![vec![CellState::Unknown; options.num_cols]; options.num_rows],
             bomb_positions: if options.bomb_probability == 0.0 {
-                vec![]
+                HashSet::new()
             } else {
                 Self::generate_random_bomb_positions(options)
             },
         }
     }
 
-    fn generate_random_bomb_positions(options: &BoardOptions) -> Vec<Position> {
+    fn generate_random_bomb_positions(options: &BoardOptions) -> HashSet<Position> {
         (0..options.num_cols)
             .flat_map(|row| {
                 (0..options.num_cols).filter_map(move |col| {
@@ -53,7 +87,41 @@ impl Board {
                     }
                 })
             })
-            .collect::<Vec<Position>>()
+            .collect::<HashSet<Position>>()
+    }
+
+    fn position_on_board(&self, pos: &Position) -> bool {
+        pos.row < self.states.len() && pos.col < self.states[0].len()
+    }
+
+    // Reveals a cell and returns the state that the cell is in. If the cell
+    // does not neighbor any bombs, its neighboring cell states are revealed as
+    // well. This operation is recursive.
+    pub fn reveal_cell(&mut self, pos: &Position) -> CellState {
+        let surrounding = pos.surrounding(self);
+        if self.bomb_positions.contains(&pos) {
+            self.states[pos.row][pos.col] = CellState::Bomb;
+            return CellState::Bomb;
+        }
+
+        let surrounding_bomb_count = surrounding
+            .iter()
+            .filter(|neighbor| self.bomb_positions.contains(neighbor))
+            .count();
+        let state = if surrounding_bomb_count == 0 {
+            CellState::Empty
+        } else {
+            CellState::Danger(surrounding_bomb_count as u8)
+        };
+        self.states[pos.row][pos.col] = state;
+        if state == CellState::Empty {
+            surrounding.iter().for_each(|neighbor| {
+                if self.states[neighbor.row][neighbor.col] == CellState::Unknown {
+                    self.reveal_cell(neighbor);
+                }
+            });
+        }
+        state
     }
 }
 
@@ -120,7 +188,7 @@ mod tests {
                 vec![E, E, E, E, E],
                 vec![E, E, E, E, E],
             ]),
-            bomb_positions: vec![],
+            bomb_positions: HashSet::new(),
         };
         assert_eq!(
             format!("{board}"),
@@ -133,6 +201,84 @@ mod tests {
                 ""
             ]
             .join("\n")
+        );
+    }
+
+    #[test]
+    fn test_reveal_recurses() {
+        let mut board = Board {
+            states: to_cell_state_grid(vec![
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+            ]),
+            bomb_positions: HashSet::from_iter(vec![Position::new(2, 2)].into_iter()),
+        };
+        assert_eq!(board.reveal_cell(&Position::new(0, 0)), CellState::Empty);
+        assert_eq!(
+            board.states,
+            to_cell_state_grid(vec![
+                vec![E, E, E, E, E],
+                vec![E, 1, 1, 1, E],
+                vec![E, 1, U, 1, E],
+                vec![E, 1, 1, 1, E],
+                vec![E, E, E, E, E],
+            ])
+        );
+    }
+
+    #[test]
+    fn test_reveal_bomb() {
+        let mut board = Board {
+            states: to_cell_state_grid(vec![
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+            ]),
+            bomb_positions: HashSet::from_iter(vec![Position::new(2, 2)].into_iter()),
+        };
+        assert_eq!(board.reveal_cell(&Position::new(2, 2)), CellState::Bomb);
+        assert_eq!(
+            board.states,
+            to_cell_state_grid(vec![
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, B, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+            ])
+        );
+    }
+
+    #[test]
+    fn test_reveal_number() {
+        let mut board = Board {
+            states: to_cell_state_grid(vec![
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+            ]),
+            bomb_positions: HashSet::from_iter(vec![Position::new(2, 2)].into_iter()),
+        };
+        assert_eq!(
+            board.reveal_cell(&Position::new(1, 2)),
+            CellState::Danger(1)
+        );
+        assert_eq!(
+            board.states,
+            to_cell_state_grid(vec![
+                vec![U, U, U, U, U],
+                vec![U, U, 1, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+                vec![U, U, U, U, U],
+            ])
         );
     }
 }
