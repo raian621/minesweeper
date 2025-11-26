@@ -73,7 +73,7 @@ impl Display for Board {
                 )
                 .unwrap();
             });
-            write!(f, "\n").unwrap();
+            writeln!(f).unwrap();
         });
         Ok(())
     }
